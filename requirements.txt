@@ -1,0 +1,8 @@
+streamlit
+pyswisseph
+geopy
+timezonefinder
+pytz
+matplotlib
+anthropic
+google-genai
