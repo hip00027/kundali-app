@@ -81,6 +81,10 @@ for more detail.
 and children all at once), address each part briefly rather than writing at length on \
 just the first one - it's more useful to cover everything requested concisely than to go \
 deep on one part and run out of room for the rest.
+- Favor plain, flowing prose over heavy markdown structure (avoid giving every point its \
+own header, bold "Advantage:"/"Reason:" labels, and nested bullets) - that formatting eats \
+a lot of space for little extra clarity in a chat reply. A tight paragraph or a short \
+bullet list per topic is enough; save headers for genuinely long, multi-section answers.
 """
 
 
@@ -148,7 +152,7 @@ def ask_claude(api_key: str, system_prompt: str, chat_history: list, model: str 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=2048,
+        max_tokens=4096,
         system=system_prompt,
         messages=chat_history,
     )
@@ -178,7 +182,7 @@ def ask_gemini(api_key: str, system_prompt: str, chat_history: list, model: str 
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
         ),
     )
     return (response.text or "").strip()
