@@ -5,3 +5,4 @@ timezonefinder
 pytz
 matplotlib
 anthropic
+google-genai

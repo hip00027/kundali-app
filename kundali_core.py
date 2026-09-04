@@ -43,22 +43,38 @@ PLANET_ORDER = ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", 
 
 
 def geocode_place(place_name: str):
-    """Look up latitude/longitude/timezone for a place name.
-    Returns (lat, lon, tz_name). Raises ValueError if not found."""
+    """Look up latitude/longitude/timezone for a place name, using the single
+    best match. Kept for backward compatibility; prefer search_places() so
+    the person can confirm which match is correct."""
+    results = search_places(place_name, limit=1)
+    r = results[0]
+    return r["lat"], r["lon"], r["tz_name"]
+
+
+def search_places(place_name: str, limit: int = 5):
+    """Look up candidate places matching a name, so the person can confirm
+    the right one (place names are often ambiguous - many cities share a
+    name). Returns a list of dicts: display_name, lat, lon, tz_name.
+    Raises ValueError if nothing is found."""
     from geopy.geocoders import Nominatim
     from timezonefinder import TimezoneFinder
 
     geolocator = Nominatim(user_agent="kundali_app")
-    location = geolocator.geocode(place_name, timeout=10)
-    if location is None:
-        raise ValueError(f"Could not find location: {place_name}")
+    locations = geolocator.geocode(place_name, exactly_one=False, limit=limit, timeout=10)
+    if not locations:
+        raise ValueError(f"Could not find any location matching: {place_name}")
 
     tf = TimezoneFinder()
-    tz_name = tf.timezone_at(lat=location.latitude, lng=location.longitude)
-    if tz_name is None:
-        raise ValueError(f"Could not determine timezone for: {place_name}")
-
-    return location.latitude, location.longitude, tz_name
+    results = []
+    for loc in locations:
+        tz_name = tf.timezone_at(lat=loc.latitude, lng=loc.longitude) or "UTC"
+        results.append({
+            "display_name": loc.address,
+            "lat": loc.latitude,
+            "lon": loc.longitude,
+            "tz_name": tz_name,
+        })
+    return results
 
 
 def _to_ut(dt_local: datetime.datetime, tz_name: str) -> datetime.datetime:

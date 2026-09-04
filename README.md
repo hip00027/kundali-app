@@ -1,29 +1,34 @@
 # Kundali Generator
 
-A Vedic astrology (Jyotish) birth chart app. Enter a name, date/time, and
-place of birth — it computes sidereal planetary positions (Lahiri ayanamsa)
-using the Swiss Ephemeris and renders both a **North Indian (diamond)** and
-**South Indian (box grid)** chart, plus a planetary position table. A **chat
-box** underneath lets the person ask about their own chart — career, marriage,
-wealth, health, whatever — grounded in their actual planetary positions, not
+A Vedic astrology (Jyotish) birth chart app. Add a person's name, date/time,
+and place of birth — it computes sidereal planetary positions (Lahiri
+ayanamsa) using the Swiss Ephemeris and renders both a **North Indian
+(diamond)** and **South Indian (box grid)** chart, plus a planetary position
+table. A **chat box** underneath lets you ask about career, marriage,
+wealth, health, or anything else, grounded in the actual chart(s) — not
 generic answers.
 
-There's also an optional **"Compare with someone else's chart"** panel: add a
-second person's birth details and the chat can then answer compatibility
-questions ("how do our charts compare for marriage?", "are we a good business
-match?"). Three deterministic compatibility indicators — Nadi, Gana, and
-Bhakoot — are computed exactly from both Moon positions; the rest of the
-compatibility picture is discussed qualitatively by the chat model itself
-(see the note in `compatibility.py` on why it stops there — see below).
+**Multiple people, both sides.** "Group A" can hold one person or a whole
+family (add as many as you like — a "family of 3" is just adding 3 people).
+An optional "Group B" lets you add a second person or family to compare
+against — e.g. comparing one family of 3 with another family of 3. Nadi,
+Gana, and Bhakoot (three deterministic classical compatibility factors) are
+computed automatically for every Group A × Group B pair, and the chat can
+answer questions about any specific pairing or the overall pattern across
+both groups.
+
+**Confirming the right city.** When you search a place by name, the app
+shows a dropdown of every matching location it found (many place names are
+shared by multiple cities/towns worldwide) so you can pick the correct one
+before it computes anything — instead of silently guessing the first result.
 
 ## Files
-- `app.py` — Streamlit UI
-- `kundali_core.py` — astronomical/astrological calculations (pyswisseph)
+- `app.py` — Streamlit UI (add-person flow, city-confirmation dropdown, Group A/B, chat)
+- `kundali_core.py` — astronomical/astrological calculations (pyswisseph) + place search
 - `chart_draw.py` — matplotlib drawing for both chart styles
-- `compatibility.py` — Nadi/Gana/Bhakoot compatibility indicators between two charts
-- `chat_assistant.py` — builds chart context (incl. house significations for
-  career/marriage/wealth, and comparison context when a second chart is added)
-  + calls the Anthropic API for the chat box
+- `compatibility.py` — Nadi/Gana/Bhakoot compatibility indicators, single-pair and group-vs-group
+- `chat_assistant.py` — builds chart context (house significations, multi-person/group
+  comparison context) + calls the chat API
 - `requirements.txt` — dependencies
 
 ## Note on the compatibility score
@@ -39,20 +44,26 @@ real chart data, clearly framed as traditional interpretation rather than a
 verdict. If you want a certified full 36-point score, a professional
 astrologer or a dedicated matching tool is the more reliable source.
 
-## The chat feature needs an API key
-The chat box calls the Anthropic API directly, so each person using the app
-needs to paste their own key into the sidebar ("Anthropic API key"). Get one
-free to start at https://console.anthropic.com/settings/keys (new accounts
-get a small free credit; after that it's pay-as-you-go, and a chat session
-like this costs a fraction of a cent per message on Sonnet).
+## The chat feature needs an API key — pick free or paid
+The sidebar has a "Chat provider" switch:
 
-The key is only kept in that browser session's memory (`st.session_state`) —
-it's never written to disk or logged. If you're deploying this for other
-people to use (e.g. via Streamlit Cloud) and don't want each person to need
-their own key, you can instead hardcode a key you control using
-[Streamlit secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management)
-and read it with `st.secrets["ANTHROPIC_API_KEY"]` in `app.py` — just be aware
-that then you're paying for everyone's usage.
+- **Google Gemini (free)** — recommended if you just want this working at no
+  cost. Get a key at [Google AI Studio](https://aistudio.google.com/apikey):
+  no credit card, no expiration, roughly 1,500 requests/day on the free
+  Flash models. Plenty for personal use.
+- **Anthropic Claude (paid)** — get a key at
+  [console.anthropic.com](https://console.anthropic.com/settings/keys).
+  New accounts sometimes get a small starting credit, but there's no
+  permanent free tier — after that it's pay-as-you-go (a chat message
+  costs a fraction of a cent on Sonnet, so it's cheap, just not free).
+
+Either way, the key is only kept in that browser session's memory
+(`st.session_state`) — never written to disk or logged. If you're deploying
+this for other people to use (e.g. via Streamlit Cloud) and don't want each
+person to need their own key, you can instead hardcode a key you control
+using [Streamlit secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management)
+and read it with `st.secrets[...]` in `app.py` — just be aware that then
+you're the one paying for / rate-limited by everyone's usage.
 
 ## Option A — Streamlit Community Cloud (free, permanent shareable link, recommended)
 1. Create a free GitHub account if you don't have one, and a new repo.

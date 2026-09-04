@@ -2,182 +2,201 @@ import datetime
 
 import streamlit as st
 
-from kundali_core import compute_kundali, geocode_place
+from kundali_core import compute_kundali, search_places
 from chart_draw import draw_north_indian, draw_south_indian
-from compatibility import compute_compatibility_notes
-from chat_assistant import build_system_prompt, ask_claude
+from compatibility import compute_compatibility_notes, compute_group_compatibility
+from chat_assistant import build_system_prompt, ask_llm
 
 st.set_page_config(page_title="Kundali Generator", page_icon="🔯", layout="centered")
 
 st.title("🔯 Kundali Generator")
-st.caption("Vedic (Jyotish) birth chart — sidereal positions, Lahiri ayanamsa")
+st.caption("Vedic (Jyotish) birth charts — sidereal positions, Lahiri ayanamsa")
 
 # --- Sidebar: API key for the chat assistant ---
 with st.sidebar:
     st.header("Chat assistant setup")
-    st.markdown(
-        "To ask questions about your chart in the chat box below, enter an "
-        "[Anthropic API key](https://console.anthropic.com/settings/keys). "
-        "It's used only in your browser session and never stored."
-    )
-    api_key = st.text_input("Anthropic API key", type="password", key="api_key")
-    model_name = st.text_input("Model", value="claude-sonnet-5", key="model_name")
-
-
-def _birth_details_form(form_key, defaults=None):
-    """Renders a birth-details form and returns (submitted, name, dt_local, lat, lon, tz_name) or None."""
-    defaults = defaults or {}
-    with st.form(form_key):
-        name = st.text_input("Name", value=defaults.get("name", ""), key=f"{form_key}_name")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            birth_date = st.date_input(
-                "Date of birth", value=defaults.get("date", datetime.date(1995, 1, 1)),
-                min_value=datetime.date(1900, 1, 1), max_value=datetime.date(2100, 1, 1),
-                key=f"{form_key}_date",
-            )
-        with col2:
-            birth_time = st.time_input(
-                "Time of birth", value=defaults.get("time", datetime.time(12, 0)),
-                key=f"{form_key}_time",
-            )
-
-        st.markdown("**Place of birth**")
-        place_mode = st.radio(
-            "How do you want to enter the location?",
-            ["Search by place name", "Enter latitude / longitude / timezone manually"],
-            horizontal=True, label_visibility="collapsed", key=f"{form_key}_place_mode",
-        )
-
-        place_name, lat_in, lon_in, tz_in = None, None, None, None
-        if place_mode == "Search by place name":
-            place_name = st.text_input("City, Country (e.g. 'Jaipur, India')", key=f"{form_key}_place_name")
-        else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                lat_in = st.number_input("Latitude", value=28.6139, format="%.4f", key=f"{form_key}_lat")
-            with c2:
-                lon_in = st.number_input("Longitude", value=77.2090, format="%.4f", key=f"{form_key}_lon")
-            with c3:
-                tz_in = st.text_input("Timezone (IANA)", value="Asia/Kolkata", key=f"{form_key}_tz")
-
-        submit_label = defaults.get("submit_label", "Generate Kundali")
-        submitted = st.form_submit_button(submit_label, use_container_width=True)
-
-    if not submitted:
-        return None
-
-    try:
-        if place_mode == "Search by place name":
-            if not place_name:
-                st.error("Please enter a place name.")
-                return None
-            with st.spinner("Looking up location..."):
-                lat, lon, tz_name = geocode_place(place_name)
-        else:
-            if not tz_in:
-                st.error("Please enter a timezone.")
-                return None
-            lat, lon, tz_name = lat_in, lon_in, tz_in
-
-        dt_local = datetime.datetime.combine(birth_date, birth_time)
-        result = compute_kundali(name or "Native", dt_local, lat, lon, tz_name)
-        return result, lat, lon, tz_name
-    except Exception as e:
-        st.error(f"Could not compute chart: {e}")
-        return None
-
-
-# --- Primary birth details form ---
-primary = _birth_details_form("primary")
-if primary is not None:
-    result, lat, lon, tz_name = primary
-    st.session_state["result"] = result
-    st.session_state["location_note"] = f"lat {lat:.4f}, lon {lon:.4f}, timezone {tz_name}"
-    st.session_state["chat_history"] = []  # reset chat when a new chart is generated
-    st.session_state.pop("result2", None)  # a fresh primary chart clears any prior comparison
-
-# --- Render chart + chat if we have a computed result (persists across chat reruns) ---
-if "result" in st.session_state:
-    result = st.session_state["result"]
-
-    st.success(f"Location resolved to {st.session_state['location_note']}")
-
-    # --- Summary ---
-    s1, s2, s3 = st.columns(3)
-    s1.metric("Ascendant (Lagna)", result["ascendant"]["rashi"])
-    s2.metric("Moon Sign (Rashi)", result["moon_sign"])
-    s3.metric("Nakshatra", f"{result['moon_nakshatra']} (pada {result['moon_pada']})")
-
-    # --- Charts ---
-    tab1, tab2 = st.tabs(["North Indian Chart", "South Indian Chart"])
-    with tab1:
-        fig_n = draw_north_indian(result, title=f"{result['name']} — North Indian")
-        st.pyplot(fig_n, use_container_width=True)
-    with tab2:
-        fig_s = draw_south_indian(result, title=f"{result['name']} — South Indian")
-        st.pyplot(fig_s, use_container_width=True)
-
-    # --- Planet table ---
-    st.subheader("Planetary Positions")
-    rows = []
-    for pname in ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", "Rahu", "Ketu"]:
-        pdata = result["planets"][pname]
-        deg_in_sign = pdata["longitude"] % 30
-        rows.append({
-            "Planet": pname,
-            "Sign": pdata["rashi"],
-            "Degree": f"{deg_in_sign:.2f}°",
-            "House": pdata["house"],
-            "Retrograde": "Yes" if pdata["retrograde"] else "No",
-        })
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    st.caption(
-        f"Ayanamsa (Lahiri): {result['ayanamsa']:.4f}°  |  "
-        f"Birth (UTC): {result['birth_datetime_utc'].strftime('%Y-%m-%d %H:%M:%S')}"
+    provider_label = st.radio(
+        "Chat provider",
+        ["Google Gemini (free)", "Anthropic Claude (paid)"],
+        key="provider_label",
     )
 
-    # --- Optional: add a second chart to compare / check compatibility ---
-    st.divider()
-    with st.expander("💞 Compare with someone else's chart (partner, family, business, etc.)"):
-        st.caption(
-            "Add a second person's birth details to unlock compatibility questions in the "
-            "chat below — the assistant will compare both charts, and a few deterministic "
-            "indicators (Nadi, Gana, Bhakoot) are computed automatically."
+    if provider_label.startswith("Google"):
+        st.session_state["provider"] = "gemini"
+        st.markdown(
+            "Get a free key (no credit card, no expiration) from "
+            "[Google AI Studio](https://aistudio.google.com/apikey)."
         )
-        secondary = _birth_details_form("secondary", defaults={"submit_label": "Add this person"})
-        if secondary is not None:
-            result2, lat2, lon2, tz2 = secondary
-            st.session_state["result2"] = result2
-            st.session_state["chat_history"] = []  # reset chat so it picks up the new context
+        st.session_state["api_key"] = st.text_input(
+            "Google Gemini API key", type="password", key="gemini_api_key_input"
+        )
+        st.session_state["model_name"] = st.text_input(
+            "Model", value="gemini-2.5-flash", key="gemini_model_input"
+        )
+    else:
+        st.session_state["provider"] = "anthropic"
+        st.markdown(
+            "Requires a funded [Anthropic API key](https://console.anthropic.com/settings/keys)."
+        )
+        st.session_state["api_key"] = st.text_input(
+            "Anthropic API key", type="password", key="anthropic_api_key_input"
+        )
+        st.session_state["model_name"] = st.text_input(
+            "Model", value="claude-sonnet-5", key="anthropic_model_input"
+        )
+
+    st.caption("Your key is used only in this browser session and never stored.")
+
+
+def render_add_person(prefix: str, container, add_label: str = "Add person"):
+    """
+    Renders an 'add a person' entry form (not a st.form, so a place search
+    can populate a dropdown of candidate cities before the person confirms
+    and adds). Appends a computed kundali result to
+    st.session_state[prefix] (a list) when confirmed.
+    """
+    counter = st.session_state.get(f"{prefix}_counter", 0)
+    ns = f"{prefix}_{counter}"  # unique key namespace, bumped after each add so fields reset
+
+    name = container.text_input("Name", key=f"{ns}_name")
+    c1, c2 = container.columns(2)
+    dob = c1.date_input(
+        "Date of birth", value=datetime.date(1995, 1, 1),
+        min_value=datetime.date(1900, 1, 1), max_value=datetime.date(2100, 1, 1),
+        key=f"{ns}_dob",
+    )
+    tob = c2.time_input("Time of birth", value=datetime.time(12, 0), key=f"{ns}_tob")
+
+    place_mode = container.radio(
+        "Place of birth",
+        ["Search by place name", "Enter latitude / longitude / timezone manually"],
+        horizontal=True, key=f"{ns}_mode",
+    )
+
+    lat = lon = tz_name = None
+
+    if place_mode == "Search by place name":
+        pc1, pc2 = container.columns([3, 1])
+        query = pc1.text_input("City, Country (e.g. 'Jaipur, India')", key=f"{ns}_query")
+        if pc2.button("Search", key=f"{ns}_search_btn", use_container_width=True):
+            try:
+                with container.spinner("Searching..."):
+                    candidates = search_places(query, limit=6)
+                st.session_state[f"{ns}_candidates"] = candidates
+            except Exception as e:
+                container.error(f"Search failed: {e}")
+                st.session_state.pop(f"{ns}_candidates", None)
+
+        candidates = st.session_state.get(f"{ns}_candidates")
+        if candidates:
+            options = [c["display_name"] for c in candidates]
+            chosen_label = container.selectbox(
+                "Confirm the correct place (please check this carefully - many places share a name)",
+                options, key=f"{ns}_choice",
+            )
+            chosen = candidates[options.index(chosen_label)]
+            lat, lon, tz_name = chosen["lat"], chosen["lon"], chosen["tz_name"]
+            container.caption(f"✓ Using lat {lat:.4f}, lon {lon:.4f}, timezone {tz_name}")
+    else:
+        c1, c2, c3 = container.columns(3)
+        lat = c1.number_input("Latitude", value=28.6139, format="%.4f", key=f"{ns}_lat")
+        lon = c2.number_input("Longitude", value=77.2090, format="%.4f", key=f"{ns}_lon")
+        tz_name = c3.text_input("Timezone (IANA)", value="Asia/Kolkata", key=f"{ns}_tz")
+
+    if container.button(add_label, key=f"{ns}_add_btn", type="primary", use_container_width=True):
+        if not name:
+            container.error("Please enter a name.")
+        elif lat is None or lon is None or not tz_name:
+            container.error("Please search and confirm a place (or enter coordinates) first.")
+        else:
+            try:
+                dt_local = datetime.datetime.combine(dob, tob)
+                result = compute_kundali(name, dt_local, lat, lon, tz_name)
+                st.session_state.setdefault(prefix, [])
+                st.session_state[prefix].append(result)
+                st.session_state[f"{prefix}_counter"] = counter + 1
+                st.session_state.pop(f"{ns}_candidates", None)
+                st.session_state["chat_history"] = []  # roster changed, reset chat
+                st.rerun()
+            except Exception as e:
+                container.error(f"Could not compute chart: {e}")
+
+
+def render_person_summary(prefix: str, container):
+    """Lists added people with a remove button and an expander with their charts."""
+    people = st.session_state.get(prefix, [])
+    for i, r in enumerate(people):
+        row = container.container(border=True)
+        rc1, rc2 = row.columns([5, 1])
+        rc1.markdown(
+            f"**{r['name']}** — Asc {r['ascendant']['rashi']}, "
+            f"Moon {r['moon_sign']} ({r['moon_nakshatra']})"
+        )
+        if rc2.button("Remove", key=f"{prefix}_remove_{i}"):
+            people.pop(i)
+            st.session_state["chat_history"] = []
             st.rerun()
 
-        if "result2" in st.session_state:
-            result2 = st.session_state["result2"]
-            notes = compute_compatibility_notes(result, result2)
-            st.session_state["compat_notes"] = notes
+        with row.expander("View charts & planetary positions"):
+            tab1, tab2 = st.tabs(["North Indian", "South Indian"])
+            with tab1:
+                st.pyplot(draw_north_indian(r, title=f"{r['name']} — North Indian"), use_container_width=True)
+            with tab2:
+                st.pyplot(draw_south_indian(r, title=f"{r['name']} — South Indian"), use_container_width=True)
 
-            st.success(f"Comparing with **{result2['name']}**")
-            c1, c2, c3 = st.columns(3)
-            c1.metric(f"{result2['name']}'s Ascendant", result2["ascendant"]["rashi"])
-            c2.metric(f"{result2['name']}'s Moon Sign", result2["moon_sign"])
-            c3.metric(f"{result2['name']}'s Nakshatra", result2["moon_nakshatra"])
-            st.text(notes["summary_text"])
+            rows = []
+            for pname in ["Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", "Rahu", "Ketu"]:
+                pdata = r["planets"][pname]
+                rows.append({
+                    "Planet": pname, "Sign": pdata["rashi"],
+                    "Degree": f"{pdata['longitude'] % 30:.2f}°",
+                    "House": pdata["house"],
+                    "Retrograde": "Yes" if pdata["retrograde"] else "No",
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.caption(
+                f"Ayanamsa (Lahiri): {r['ayanamsa']:.4f}°  |  "
+                f"Birth (UTC): {r['birth_datetime_utc'].strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
-            if st.button("Remove comparison"):
-                st.session_state.pop("result2", None)
-                st.session_state.pop("compat_notes", None)
-                st.session_state["chat_history"] = []
-                st.rerun()
+
+# --- Group A ---
+st.subheader("👤 Group A")
+st.caption("Add one person, or a whole family — each birth chart is computed and shown below.")
+render_add_person("group_a", st, add_label="Add person to Group A")
+render_person_summary("group_a", st)
+
+# --- Group B (optional) ---
+st.divider()
+with st.expander("💞 Compare with another person or family (Group B, optional)"):
+    st.caption(
+        "Add people here to unlock comparison questions in the chat — e.g. comparing a "
+        "family of 3 with another family of 3. Nadi/Gana/Bhakoot are computed for every "
+        "Group A × Group B pair automatically."
+    )
+    render_add_person("group_b", st, add_label="Add person to Group B")
+    render_person_summary("group_b", st)
+
+group_a = st.session_state.get("group_a", [])
+group_b = st.session_state.get("group_b", [])
+
+if not group_a:
+    st.info("Add at least one person to Group A above to get started.")
+else:
+    # --- Compatibility snapshot, if Group B has members ---
+    group_compat_text = ""
+    if group_b:
+        group_compat_text = compute_group_compatibility(group_a, group_b)
+        st.divider()
+        st.subheader("🔍 Compatibility snapshot")
+        st.text(group_compat_text)
 
     # --- Chat ---
     st.divider()
-    st.subheader("💬 Ask about this chart")
+    st.subheader("💬 Ask about these charts")
     st.caption(
-        "Ask about career, marriage, wealth, health, or anything else in the chart — "
-        "or, if you've added a second person above, ask how the two charts compare."
+        "Ask about career, marriage, wealth, health, or anything else — or, with Group B "
+        "added, ask how specific people or the two groups compare."
     )
 
     if "chat_history" not in st.session_state:
@@ -187,10 +206,10 @@ if "result" in st.session_state:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    question = st.chat_input("e.g. 'How do our charts compare for marriage?'")
+    question = st.chat_input("e.g. 'How does our family compare with theirs for marriage?'")
     if question:
         if not st.session_state.get("api_key"):
-            st.error("Add your Anthropic API key in the sidebar first.")
+            st.error("Add your API key in the sidebar first.")
         else:
             st.session_state["chat_history"].append({"role": "user", "content": question})
             with st.chat_message("user"):
@@ -200,21 +219,17 @@ if "result" in st.session_state:
                 with st.spinner("Thinking..."):
                     try:
                         system_prompt = build_system_prompt(
-                            result,
-                            result2=st.session_state.get("result2"),
-                            compatibility_notes=st.session_state.get("compat_notes"),
+                            group_a, group_b=group_b, group_compat_text=group_compat_text,
                         )
-                        reply = ask_claude(
+                        reply = ask_llm(
+                            provider=st.session_state.get("provider", "gemini"),
                             api_key=st.session_state["api_key"],
                             system_prompt=system_prompt,
                             chat_history=st.session_state["chat_history"],
-                            model=st.session_state.get("model_name") or "claude-sonnet-5",
+                            model=st.session_state.get("model_name") or "gemini-2.5-flash",
                         )
                     except Exception as e:
                         reply = f"Sorry, something went wrong calling the API: {e}"
                 st.markdown(reply)
 
             st.session_state["chat_history"].append({"role": "assistant", "content": reply})
-
-else:
-    st.info("Fill in the birth details above and click **Generate Kundali**.")

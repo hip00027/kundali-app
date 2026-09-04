@@ -40,25 +40,27 @@ malefic occupancy, retrograde, etc.) rather than giving a generic answer.
 
 """
 
-COMPATIBILITY_GUIDANCE = """REFERENCE: COMPARING TWO CHARTS / COMPATIBILITY QUESTIONS
-A second person's chart is included below, along with a few deterministic compatibility \
-indicators (Nadi, Gana, Bhakoot) that were computed directly from both charts' Moon \
-nakshatras/signs. Use these as a starting point, and add qualitative discussion of the \
-other classical dimensions (Varna, Vashya, Yoni, Graha Maitri - i.e. spiritual temperament, \
-mutual attraction, instinctive/physical compatibility, and mental rapport based on the \
-Moon-sign lords' relationship) using your own Jyotish knowledge applied to the actual \
-Moon signs given. Also compare the two Ascendants and 7th-house placements if the \
-question is about romantic/marital compatibility specifically, or the two 10th houses if \
-it's a professional/business-partner compatibility question, and so on - adapt which \
-houses matter to what kind of relationship is being asked about (romantic partner, \
-business partner, friend, family member).
+COMPATIBILITY_GUIDANCE = """REFERENCE: COMPARING CHARTS ACROSS GROUPS / COMPATIBILITY QUESTIONS
+One or more additional people's charts are included below (Group B), alongside a few \
+deterministic compatibility indicators (Nadi, Gana, Bhakoot) computed for every person-in-A \
+x person-in-B pair from their Moon nakshatras/signs. Use these as a starting point, and add \
+qualitative discussion of the other classical dimensions (Varna, Vashya, Yoni, Graha Maitri \
+- i.e. spiritual temperament, mutual attraction, instinctive/physical compatibility, and \
+mental rapport based on the Moon-sign lords' relationship) using your own Jyotish knowledge \
+applied to the actual Moon signs given. When asked to compare two specific named individuals \
+(e.g. one person from each group), also compare their Ascendants and 7th houses for \
+romantic/marital questions, or their 10th houses for professional/business questions - adapt \
+which houses matter to the kind of relationship being asked about. When asked about two \
+whole groups (e.g. "family vs family"), summarize the overall pattern across all the pairs \
+rather than only picking one pair, and note which specific pairings look strongest or most \
+cautioned.
 
-Do NOT present a fabricated precise 36-point Guna Milan total - the app only computes \
-three of the eight classical koots exactly (noted below); say so plainly if asked for the \
-full score, and offer the qualitative read instead. Keep the framing as traditional \
-symbolic compatibility patterns worth reflecting on, not a deterministic verdict on \
-whether two people should or shouldn't be together - that judgment belongs to the people \
-involved, not to a chart reading.
+Do NOT present a fabricated precise 36-point Guna Milan total - the app only computes three \
+of the eight classical koots exactly (noted below); say so plainly if asked for a full \
+score, and offer the qualitative read instead. Keep the framing as traditional symbolic \
+compatibility patterns worth reflecting on, not a deterministic verdict on whether specific \
+people should or shouldn't be together, or whether two families are "good" or "bad" matches \
+- that judgment belongs to the people involved, not to a chart reading.
 
 """
 
@@ -99,19 +101,34 @@ def _chart_block(result: dict, label: str = "") -> str:
     )
 
 
-def build_system_prompt(result: dict, result2: dict = None, compatibility_notes: dict = None) -> str:
+def build_system_prompt(group_a: list, group_b: list = None, group_compat_text: str = "") -> str:
+    """
+    group_a: list of compute_kundali() results (e.g. one person, or a family)
+    group_b: optional second list, for comparison questions
+    group_compat_text: optional precomputed text from
+        compatibility.compute_group_compatibility(group_a, group_b)
+    """
+    group_b = group_b or []
     parts = [SYSTEM_PROMPT_HEADER]
 
-    if result2 is not None:
-        parts.append(_chart_block(result, label=result.get("name", "Person 1")))
+    label_a = "Group A" if len(group_a) > 1 else None
+    for i, result in enumerate(group_a, start=1):
+        label = f"Group A - {result['name']}" if label_a else ""
+        parts.append(_chart_block(result, label=label))
         parts.append("\n")
-        parts.append(_chart_block(result2, label=result2.get("name", "Person 2")))
-        if compatibility_notes:
-            parts.append("\nCOMPUTED COMPATIBILITY INDICATORS (Nadi / Gana / Bhakoot)\n" + "-" * 55 + "\n")
-            parts.append(compatibility_notes["summary_text"] + "\n")
+
+    if group_b:
+        label_b = "Group B" if len(group_b) > 1 else None
+        for i, result in enumerate(group_b, start=1):
+            label = f"Group B - {result['name']}" if label_b else ""
+            parts.append(_chart_block(result, label=label))
+            parts.append("\n")
+
+        if group_compat_text:
+            parts.append("\n" + group_compat_text + "\n")
+
         parts.append("\n" + HOUSE_SIGNIFICATIONS + COMPATIBILITY_GUIDANCE + GUIDELINES)
     else:
-        parts.append(_chart_block(result))
         parts.append("\n" + HOUSE_SIGNIFICATIONS + GUIDELINES)
 
     return "\n".join(parts)
@@ -133,3 +150,38 @@ def ask_claude(api_key: str, system_prompt: str, chat_history: list, model: str 
     )
     parts = [block.text for block in response.content if block.type == "text"]
     return "\n".join(parts).strip()
+
+
+def ask_gemini(api_key: str, system_prompt: str, chat_history: list, model: str = "gemini-2.5-flash") -> str:
+    """
+    Same shape as ask_claude, but calls Google's Gemini API (which has a
+    genuinely free, non-expiring tier - see README). Gemini expects the
+    assistant role to be called "model" rather than "assistant".
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    contents = [
+        types.Content(
+            role="model" if msg["role"] == "assistant" else "user",
+            parts=[types.Part(text=msg["content"])],
+        )
+        for msg in chat_history
+    ]
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            max_output_tokens=1024,
+        ),
+    )
+    return (response.text or "").strip()
+
+
+def ask_llm(provider: str, api_key: str, system_prompt: str, chat_history: list, model: str) -> str:
+    """Routes to the chosen provider. provider is 'gemini' or 'anthropic'."""
+    if provider == "gemini":
+        return ask_gemini(api_key, system_prompt, chat_history, model=model)
+    return ask_claude(api_key, system_prompt, chat_history, model=model)

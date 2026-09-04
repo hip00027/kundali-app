@@ -116,3 +116,34 @@ def compute_compatibility_notes(result1: dict, result2: dict) -> dict:
         "bhakoot_note": bhakoot_note,
         "summary_text": "\n".join(summary_lines),
     }
+
+
+def compute_group_compatibility(group_a: list, group_b: list) -> str:
+    """
+    group_a, group_b: lists of compute_kundali() results (e.g. two families).
+    Returns a text block with Nadi/Gana/Bhakoot indicators for every
+    person-in-A x person-in-B pair, for feeding into the chat context.
+    """
+    if not group_a or not group_b:
+        return ""
+
+    blocks = [
+        f"CROSS-GROUP COMPATIBILITY INDICATORS ({len(group_a)} vs {len(group_b)} people)\n"
+        + "-" * 55
+    ]
+    for p1 in group_a:
+        for p2 in group_b:
+            notes = compute_compatibility_notes(p1, p2)
+            blocks.append(f"\n{p1['name']} <-> {p2['name']}:")
+            blocks.append(
+                f"  Nadi: {notes['nadi_1']} vs {notes['nadi_2']}"
+                + (" (SAME - Nadi Dosha)" if notes["nadi_dosha"] else " (different)")
+            )
+            blocks.append(f"  Gana: {notes['gana_note']}")
+            blocks.append(f"  Bhakoot: {notes['bhakoot_note']}")
+    blocks.append(
+        "\nNote: only Nadi, Gana and Bhakoot are computed exactly for each pair (see "
+        "explanation above). For the remaining classical factors and any overall "
+        "impression across the two groups, reason qualitatively from the chart data."
+    )
+    return "\n".join(blocks)
