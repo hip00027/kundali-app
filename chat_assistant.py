@@ -18,10 +18,11 @@ sign/lord; also the 6th (job, service, competition) and 2nd (income from work). 
 the Sun are natural career significators (karakas); the Sun in/ruling the 10th, or Saturn \
 well placed, often correlates with career discipline and public role.
 - Marriage / relationships: mainly the 7th house (partnership, spouse) and its sign/lord; \
-Venus is the natural significator of marriage/love for a male chart, Jupiter for a female \
-chart in classical texts (modern practice often looks at both regardless of gender). Also \
-check for planets placed in the 7th house or aspecting it, and the Moon's condition for \
-emotional temperament in relationships.
+classical texts use Venus as the natural significator (karaka) of the spouse/love when \
+reading a male chart, and Jupiter when reading a female chart - use whichever applies if \
+gender is given for that person, and if it isn't given, mention both significators rather \
+than assuming. Also check for planets placed in the 7th house or aspecting it, and the \
+Moon's condition for emotional temperament in relationships.
 - Wealth / finances: mainly the 2nd house (accumulated wealth, family resources, savings) \
 and the 11th house (income, gains, fulfillment of desires); Jupiter is the natural \
 significator of wealth/abundance, Venus of luxury and material comfort.
@@ -71,7 +72,9 @@ yogas, retrograde/combust effects, etc.) as they apply to the chart(s) above.
 - If asked about something this data doesn't cover (e.g. divisional charts, dasha \
 periods/timing, transits, exact Mangal Dosha assessment), say plainly that it isn't in \
 the current chart data, and answer at the level of general principles instead of \
-inventing chart-specific claims.
+inventing chart-specific claims. This includes Mangal Dosha (Kuja Dosha) checks, which \
+depend on exact house/aspect rules this app doesn't compute - you can explain the general \
+concept, but don't declare a specific chart to have or lack it.
 - Keep the tone grounded and reflective rather than fatalistic - frame chart readings as \
 traditional symbolic interpretations and possible tendencies, not guaranteed predictions, \
 and not medical/financial/legal advice.
@@ -95,9 +98,12 @@ def _chart_block(result: dict, label: str = "") -> str:
         for pname, pdata in result["planets"].items()
     )
     title = f"BIRTH CHART{' - ' + label if label else ''}"
+    gender = result.get("gender")
+    gender_line = f"Gender: {gender}\n" if gender and gender != "Prefer not to say" else ""
     return (
         f"{title}\n{'-' * len(title)}\n"
         f"Name: {result['name']}\n"
+        f"{gender_line}"
         f"Birth date/time (local): {result['birth_datetime_local'].strftime('%Y-%m-%d %H:%M')}\n"
         f"Birth place: lat {result['lat']:.4f}, lon {result['lon']:.4f}, timezone {result['tz_name']}\n"
         f"Ayanamsa used: Lahiri ({result['ayanamsa']:.4f}°)\n"
@@ -165,9 +171,13 @@ def ask_gemini(api_key: str, system_prompt: str, chat_history: list, model: str 
     Same shape as ask_claude, but calls Google's Gemini API (which has a
     genuinely free, non-expiring tier - see README). Gemini expects the
     assistant role to be called "model" rather than "assistant".
+    Retries a few times on transient "model overloaded" (503) errors, which
+    are common on the free tier during high-traffic periods.
     """
+    import time
     from google import genai
     from google.genai import types
+    from google.genai import errors as genai_errors
 
     client = genai.Client(api_key=api_key)
     contents = [
@@ -177,15 +187,26 @@ def ask_gemini(api_key: str, system_prompt: str, chat_history: list, model: str 
         )
         for msg in chat_history
     ]
-    response = client.models.generate_content(
-        model=model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=4096,
-        ),
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        max_output_tokens=4096,
     )
-    return (response.text or "").strip()
+
+    attempts = 3
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            response = client.models.generate_content(model=model, contents=contents, config=config)
+            return (response.text or "").strip()
+        except genai_errors.ServerError as e:
+            last_error = e
+            if attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))  # brief backoff: 2s, 4s
+                continue
+            raise RuntimeError(
+                "Google's free Gemini service is overloaded right now (this is temporary, "
+                "not a problem with your key) - please wait a minute and try again."
+            ) from e
 
 
 def ask_llm(provider: str, api_key: str, system_prompt: str, chat_history: list, model: str) -> str:
