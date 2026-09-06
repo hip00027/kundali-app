@@ -1,7 +1,9 @@
 import datetime
+import json
 
 import streamlit as st
 
+import storage
 from kundali_core import compute_kundali, search_places
 from chart_draw import draw_north_indian, draw_south_indian
 from compatibility import compute_compatibility_notes, compute_group_compatibility
@@ -11,6 +13,9 @@ st.set_page_config(page_title="Kundali Generator", page_icon="🔯", layout="cen
 
 st.title("🔯 Kundali Generator")
 st.caption("Vedic (Jyotish) birth charts — sidereal positions, Lahiri ayanamsa")
+
+if "saved_people" not in st.session_state:
+    st.session_state["saved_people"] = storage.load_saved_people()
 
 # --- Sidebar: API key for the chat assistant ---
 with st.sidebar:
@@ -47,25 +52,57 @@ with st.sidebar:
 
     st.caption("Your key is used only in this browser session and never stored.")
 
+    st.divider()
+    st.subheader("Saved people backup")
+    st.caption(
+        "Saved people live in a file on the app's server, which may reset if the app "
+        "goes to sleep. Download a backup here, or restore one you saved earlier."
+    )
+    if st.session_state["saved_people"]:
+        st.download_button(
+            "⬇️ Export saved people",
+            data=json.dumps(st.session_state["saved_people"], indent=2),
+            file_name="kundali_saved_people.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    uploaded = st.file_uploader("⬆️ Import saved people", type="json", key="import_uploader")
+    if uploaded is not None:
+        try:
+            imported = json.load(uploaded)
+            st.session_state["saved_people"] = storage.merge_saved_people(imported)
+            st.success(f"Imported. Now {len(st.session_state['saved_people'])} saved people.")
+        except Exception as e:
+            st.error(f"Could not read that file: {e}")
+
+
+GENDER_OPTIONS = ["Prefer not to say", "Female", "Male", "Other"]
+
 
 def render_add_person(prefix: str, container, add_label: str = "Add person"):
     """
     Renders an 'add a person' entry form (not a st.form, so a place search
     can populate a dropdown of candidate cities before the person confirms
     and adds). Appends a computed kundali result to
-    st.session_state[prefix] (a list) when confirmed.
+    st.session_state[prefix] (a list) when confirmed, and auto-saves the raw
+    birth details for reuse later.
     """
     counter = st.session_state.get(f"{prefix}_counter", 0)
     ns = f"{prefix}_{counter}"  # unique key namespace, bumped after each add so fields reset
 
     name = container.text_input("Name", key=f"{ns}_name")
-    c1, c2 = container.columns(2)
+    c1, c2, c3 = container.columns(3)
     dob = c1.date_input(
         "Date of birth", value=datetime.date(1995, 1, 1),
         min_value=datetime.date(1900, 1, 1), max_value=datetime.date(2100, 1, 1),
         key=f"{ns}_dob",
     )
     tob = c2.time_input("Time of birth", value=datetime.time(12, 0), key=f"{ns}_tob")
+    gender = c3.selectbox(
+        "Gender", GENDER_OPTIONS, key=f"{ns}_gender",
+        help="Used only so the chat can apply the correct classical spouse significator "
+             "(Venus for a male chart, Jupiter for a female chart) - optional.",
+    )
 
     place_mode = container.radio(
         "Place of birth",
@@ -111,15 +148,62 @@ def render_add_person(prefix: str, container, add_label: str = "Add person"):
         else:
             try:
                 dt_local = datetime.datetime.combine(dob, tob)
-                result = compute_kundali(name, dt_local, lat, lon, tz_name)
+                result = compute_kundali(name, dt_local, lat, lon, tz_name, gender=gender)
                 st.session_state.setdefault(prefix, [])
                 st.session_state[prefix].append(result)
                 st.session_state[f"{prefix}_counter"] = counter + 1
                 st.session_state.pop(f"{ns}_candidates", None)
                 st.session_state["chat_history"] = []  # roster changed, reset chat
+
+                st.session_state["saved_people"] = storage.add_saved_person({
+                    "name": name, "dob": dob.isoformat(), "tob": tob.strftime("%H:%M"),
+                    "lat": lat, "lon": lon, "tz_name": tz_name, "gender": gender,
+                })
                 st.rerun()
             except Exception as e:
                 container.error(f"Could not compute chart: {e}")
+
+
+def render_saved_people(container):
+    """Lists people saved from previous adds, with one-click reuse into Group A or B."""
+    people = st.session_state.get("saved_people", [])
+    if not people:
+        return
+    with container.expander(f"📇 Saved people ({len(people)}) — reuse instead of retyping", expanded=False):
+        for i, p in enumerate(people):
+            row = st.container(border=True)
+            gender_tag = f", {p['gender']}" if p.get("gender") and p["gender"] != "Prefer not to say" else ""
+            row.markdown(f"**{p['name']}**{gender_tag} — born {p['dob']} {p['tob']}")
+            b1, b2, b3 = row.columns(3)
+            if b1.button("+ Group A", key=f"saved_{i}_to_a", use_container_width=True):
+                try:
+                    dt_local = datetime.datetime.combine(
+                        datetime.date.fromisoformat(p["dob"]),
+                        datetime.datetime.strptime(p["tob"], "%H:%M").time(),
+                    )
+                    result = compute_kundali(p["name"], dt_local, p["lat"], p["lon"], p["tz_name"],
+                                              gender=p.get("gender"))
+                    st.session_state.setdefault("group_a", []).append(result)
+                    st.session_state["chat_history"] = []
+                    st.rerun()
+                except Exception as e:
+                    row.error(f"Could not add: {e}")
+            if b2.button("+ Group B", key=f"saved_{i}_to_b", use_container_width=True):
+                try:
+                    dt_local = datetime.datetime.combine(
+                        datetime.date.fromisoformat(p["dob"]),
+                        datetime.datetime.strptime(p["tob"], "%H:%M").time(),
+                    )
+                    result = compute_kundali(p["name"], dt_local, p["lat"], p["lon"], p["tz_name"],
+                                              gender=p.get("gender"))
+                    st.session_state.setdefault("group_b", []).append(result)
+                    st.session_state["chat_history"] = []
+                    st.rerun()
+                except Exception as e:
+                    row.error(f"Could not add: {e}")
+            if b3.button("🗑️ Delete", key=f"saved_{i}_delete", use_container_width=True):
+                st.session_state["saved_people"] = storage.delete_saved_person(i)
+                st.rerun()
 
 
 def render_person_summary(prefix: str, container):
@@ -163,6 +247,7 @@ def render_person_summary(prefix: str, container):
 # --- Group A ---
 st.subheader("👤 Group A")
 st.caption("Add one person, or a whole family — each birth chart is computed and shown below.")
+render_saved_people(st)
 render_add_person("group_a", st, add_label="Add person to Group A")
 render_person_summary("group_a", st)
 
