@@ -96,6 +96,42 @@ def _nakshatra_info(moon_longitude: float):
     return NAKSHATRAS[idx], pada
 
 
+def _compute_planets_for_jd(jd_ut: float) -> dict:
+    """
+    Computes sidereal (Lahiri) longitude/sign/retrograde for all 9 grahas at
+    a given UT Julian day. Shared by natal chart computation and by transit
+    calculations, so both use exactly the same underlying positions.
+    """
+    swe.set_sid_mode(swe.SIDM_LAHIRI)
+    planets = {}
+    for pname, pid in PLANET_IDS.items():
+        pos, _flag = swe.calc_ut(jd_ut, pid, swe.FLG_SIDEREAL | swe.FLG_SWIEPH | swe.FLG_SPEED)
+        lon_ = pos[0] % 360
+        speed = pos[3]
+        planets[pname] = {
+            "longitude": lon_,
+            "sign": _sign_index(lon_),
+            "rashi": RASHIS[_sign_index(lon_)],
+            "retrograde": speed < 0,
+        }
+
+    node_pos, _ = swe.calc_ut(jd_ut, swe.MEAN_NODE, swe.FLG_SIDEREAL | swe.FLG_SWIEPH)
+    rahu_lon = node_pos[0] % 360
+    ketu_lon = (rahu_lon + 180) % 360
+    planets["Rahu"] = {"longitude": rahu_lon, "sign": _sign_index(rahu_lon),
+                        "rashi": RASHIS[_sign_index(rahu_lon)], "retrograde": True}
+    planets["Ketu"] = {"longitude": ketu_lon, "sign": _sign_index(ketu_lon),
+                        "rashi": RASHIS[_sign_index(ketu_lon)], "retrograde": True}
+    return planets
+
+
+def jd_from_utc(dt_utc: datetime.datetime) -> float:
+    return swe.julday(
+        dt_utc.year, dt_utc.month, dt_utc.day,
+        dt_utc.hour + dt_utc.minute / 60.0 + dt_utc.second / 3600.0,
+    )
+
+
 def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: float, tz_name: str,
                      gender: str = None):
     """
@@ -107,11 +143,7 @@ def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: flo
         change any of the astronomical/positional calculations below.
     """
     dt_ut = _to_ut(dt_local, tz_name)
-
-    jd_ut = swe.julday(
-        dt_ut.year, dt_ut.month, dt_ut.day,
-        dt_ut.hour + dt_ut.minute / 60.0 + dt_ut.second / 3600.0,
-    )
+    jd_ut = jd_from_utc(dt_ut)
 
     swe.set_sid_mode(swe.SIDM_LAHIRI)
     ayanamsa = swe.get_ayanamsa_ut(jd_ut)
@@ -123,28 +155,11 @@ def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: flo
     asc_sign = _sign_index(asc_lon)
 
     # --- Planets ---
-    planets = {}
-    for pname, pid in PLANET_IDS.items():
-        pos, _flag = swe.calc_ut(jd_ut, pid, swe.FLG_SIDEREAL | swe.FLG_SWIEPH | swe.FLG_SPEED)
-        lon_ = pos[0] % 360
-        speed = pos[3]
-        planets[pname] = {
-            "longitude": lon_,
-            "sign": _sign_index(lon_),
-            "retrograde": speed < 0,
-        }
-
-    # Rahu (mean lunar node) and Ketu (180 deg opposite)
-    node_pos, _ = swe.calc_ut(jd_ut, swe.MEAN_NODE, swe.FLG_SIDEREAL | swe.FLG_SWIEPH)
-    rahu_lon = node_pos[0] % 360
-    ketu_lon = (rahu_lon + 180) % 360
-    planets["Rahu"] = {"longitude": rahu_lon, "sign": _sign_index(rahu_lon), "retrograde": True}
-    planets["Ketu"] = {"longitude": ketu_lon, "sign": _sign_index(ketu_lon), "retrograde": True}
+    planets = _compute_planets_for_jd(jd_ut)
 
     # --- Whole-sign houses (most common Vedic house system) ---
     for pname, pdata in planets.items():
         pdata["house"] = ((pdata["sign"] - asc_sign) % 12) + 1
-        pdata["rashi"] = RASHIS[pdata["sign"]]
 
     # --- Nakshatra (based on Moon) ---
     moon_nakshatra, moon_pada = _nakshatra_info(planets["Moon"]["longitude"])
