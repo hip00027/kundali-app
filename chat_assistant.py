@@ -4,9 +4,36 @@ Builds a text summary of one or two computed kundalis (for grounding the
 chat) and sends chat messages to the Anthropic API.
 """
 
+import dasha
+import transits
+
 SYSTEM_PROMPT_HEADER = """You are a knowledgeable, level-headed Vedic astrology (Jyotish) assistant \
 embedded in a kundali-generator app. You answer questions about the specific birth chart(s) \
 given below - use them to ground every answer rather than speaking generically.
+
+"""
+
+TIMING_GUIDANCE = """REFERENCE: USING DASHA AND TRANSIT DATA FOR TIMING QUESTIONS
+Each chart above is followed by its Vimshottari Mahadasha timeline (the classical planetary-period \
+system) and its current transits (Gochar), including Sade Sati status if relevant. These ARE \
+computed for real - use them directly when asked about timing ("when will X happen", "how is this \
+year", "what period am I in"):
+- The current Mahadasha and Antardasha lord (and what they're each known to signify) is the \
+standard starting point for "what phase of life is this" questions.
+- Current transits, especially of Saturn, Jupiter, Rahu/Ketu (the slower movers), over natal houses \
+indicate which life areas are activated right now - cross-reference the transited house with its \
+significations (see HOUSE SIGNIFICATIONS above).
+- Sade Sati (if active) is specifically relevant to questions about a generally heavier, more \
+effortful period - mention its phase and approximate date range when it's active and the question \
+is about difficulty, obstacles, or "why does this feel hard right now".
+- These give you real month/year-level anchors - use them to name actual periods and approximate \
+date ranges rather than saying no timing data exists. That said, precise day-level predictions, \
+transits of the fast-moving inner planets (Moon, Mercury, Venus, Sun) beyond the snapshot given, \
+and any dasha/transit combination not shown above are still outside this app's scope - be clear \
+about that boundary rather than inventing specifics beyond what's provided.
+- Keep the framing consistent with the rest of your answers: these are traditional timing \
+frameworks worth reflecting on, not certainties - a "difficult" period is an invitation to be \
+more careful and deliberate, not a fixed sentence.
 
 """
 
@@ -69,12 +96,14 @@ GUIDELINES = """GUIDELINES
 - Answer using standard Vedic astrology concepts (rashis, houses, nakshatras, dashas, \
 yogas, retrograde/combust effects, etc.) as they apply to the chart(s) above.
 - Be specific to the data given rather than generic.
-- If asked about something this data doesn't cover (e.g. divisional charts, dasha \
-periods/timing, transits, exact Mangal Dosha assessment), say plainly that it isn't in \
-the current chart data, and answer at the level of general principles instead of \
-inventing chart-specific claims. This includes Mangal Dosha (Kuja Dosha) checks, which \
-depend on exact house/aspect rules this app doesn't compute - you can explain the general \
-concept, but don't declare a specific chart to have or lack it.
+- If asked about something this data doesn't cover (e.g. divisional charts (D9/D10/etc.), \
+Pratyantardasha sub-sub-periods, exact Mangal Dosha assessment, or transits of fast-moving \
+planets beyond the snapshot given), say plainly that it isn't in the current chart data, and \
+answer at the level of general principles instead of inventing chart-specific claims. This \
+includes Mangal Dosha (Kuja Dosha) checks, which depend on exact house/aspect rules this app \
+doesn't compute - you can explain the general concept, but don't declare a specific chart to \
+have or lack it. (Mahadasha/Antardasha timing and current major-planet transits, including Sade \
+Sati, ARE computed and provided below - see TIMING GUIDANCE.)
 - Keep the tone grounded and reflective rather than fatalistic - frame chart readings as \
 traditional symbolic interpretations and possible tendencies, not guaranteed predictions, \
 and not medical/financial/legal advice.
@@ -100,7 +129,8 @@ def _chart_block(result: dict, label: str = "") -> str:
     title = f"BIRTH CHART{' - ' + label if label else ''}"
     gender = result.get("gender")
     gender_line = f"Gender: {gender}\n" if gender and gender != "Prefer not to say" else ""
-    return (
+
+    block = (
         f"{title}\n{'-' * len(title)}\n"
         f"Name: {result['name']}\n"
         f"{gender_line}"
@@ -113,6 +143,18 @@ def _chart_block(result: dict, label: str = "") -> str:
         f"Moon Nakshatra: {result['moon_nakshatra']} (pada {result['moon_pada']})\n\n"
         f"Planetary placements (sign / house / retrograde):\n{planet_lines}\n"
     )
+
+    try:
+        block += "\n" + dasha.build_dasha_summary(result) + "\n"
+    except Exception:
+        pass  # don't let a dasha edge case (e.g. unusual date) break the whole chat
+
+    try:
+        block += "\n" + transits.build_transit_summary(result) + "\n"
+    except Exception:
+        pass
+
+    return block
 
 
 def build_system_prompt(group_a: list, group_b: list = None, group_compat_text: str = "") -> str:
@@ -141,9 +183,9 @@ def build_system_prompt(group_a: list, group_b: list = None, group_compat_text: 
         if group_compat_text:
             parts.append("\n" + group_compat_text + "\n")
 
-        parts.append("\n" + HOUSE_SIGNIFICATIONS + COMPATIBILITY_GUIDANCE + GUIDELINES)
+        parts.append("\n" + HOUSE_SIGNIFICATIONS + TIMING_GUIDANCE + COMPATIBILITY_GUIDANCE + GUIDELINES)
     else:
-        parts.append("\n" + HOUSE_SIGNIFICATIONS + GUIDELINES)
+        parts.append("\n" + HOUSE_SIGNIFICATIONS + TIMING_GUIDANCE + GUIDELINES)
 
     return "\n".join(parts)
 
