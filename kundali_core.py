@@ -96,10 +96,15 @@ def _nakshatra_info(moon_longitude: float):
     return NAKSHATRAS[idx], pada
 
 
-def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: float, tz_name: str):
+def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: float, tz_name: str,
+                     gender: str = None):
     """
     Main entry point. Returns a dict with all computed chart data.
     dt_local: naive datetime in the birth location's local time.
+    gender: optional, one of "Female"/"Male"/"Other/Prefer not to say" (or None).
+        Used only to let the chat assistant apply gender-specific classical
+        significators (e.g. Venus vs Jupiter as spouse karaka) - it does not
+        change any of the astronomical/positional calculations below.
     """
     dt_ut = _to_ut(dt_local, tz_name)
 
@@ -146,6 +151,7 @@ def compute_kundali(name: str, dt_local: datetime.datetime, lat: float, lon: flo
 
     return {
         "name": name,
+        "gender": gender,
         "birth_datetime_local": dt_local,
         "birth_datetime_utc": dt_ut,
         "lat": lat,
